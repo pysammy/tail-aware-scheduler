@@ -38,6 +38,13 @@ VLLM_TAIL_AWARE_LONG_QUOTA=0.2
 
 Default vLLM behavior is unchanged unless `VLLM_TAIL_AWARE_SCHEDULING=1` is set.
 
+Run the scheduler unit test job in Kubernetes:
+
+```bash
+kubectl apply -f k8s/tail-aware-vllm-scheduler-pytest-job.yaml
+kubectl logs -n ucsc-hsc job/tail-aware-vllm-scheduler-pytest -f
+```
+
 ## Current Recommendation
 
 Do not start by editing vLLM directly. First collect offline traces with logit scores enabled and verify that `P(EOS)` separates short and long generations. This reduces the risk of spending time on scheduler integration before the core signal is validated.
@@ -102,3 +109,5 @@ After the offline signal looks useful, keep the scheduler changes small:
 - Preserve existing continuous batching, KV cache handling, and model execution.
 
 Target file from the proposal: `vllm/v1/core/sched/scheduler.py`.
+
+See `proposal/implementation_todo.md` for the current follow-up plan.

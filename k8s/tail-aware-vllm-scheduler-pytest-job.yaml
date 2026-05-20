@@ -31,7 +31,7 @@ spec:
                 git clone https://github.com/labyrinth-ssr/Tail-Aware-Scheduer.git "$REPO"
               fi
               git -C "$REPO" submodule init
-              git -C "$REPO/vllm" fetch origin tail-aware-scheduler
+              git -C "$REPO/vllm" fetch --all
               git -C "$REPO" submodule update --recursive
           resources:
             requests:

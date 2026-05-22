@@ -21,57 +21,64 @@ spec:
             - -lc
             - |
               set -eux
-              mkdir -p /workspace/src
-              REPO=/workspace/src/Tail-Aware-Scheduer
-              if [ -d "$REPO/.git" ]; then
-                git -C "$REPO" fetch origin main
-                git -C "$REPO" checkout main
-                git -C "$REPO" reset --hard origin/main
-              else
-                git clone https://github.com/labyrinth-ssr/Tail-Aware-Scheduer.git "$REPO"
-              fi
-              git -C "$REPO" submodule init
-              git -C "$REPO/vllm" fetch --all
-              git -C "$REPO" submodule update --recursive
+              REPO=/src/Tail-Aware-Scheduer
+              BRANCH=main
+              git clone --depth 1 -b "$BRANCH" \
+                https://github.com/labyrinth-ssr/Tail-Aware-Scheduer.git "$REPO"
+              NEED=$(git -C "$REPO" rev-parse HEAD:vllm)
+              git clone --depth 1 --branch tail-aware-scheduler \
+                https://github.com/labyrinth-ssr/vllm.git "$REPO/vllm"
+              git -C "$REPO/vllm" fetch --depth 1 origin "$NEED"
+              git -C "$REPO/vllm" checkout "$NEED"
           resources:
             requests:
-              cpu: "1"
-              memory: 2Gi
+              cpu: "2"
+              memory: 4Gi
             limits:
-              cpu: "1"
-              memory: 2Gi
+              cpu: "2"
+              memory: 4Gi
           volumeMounts:
-            - name: exp
-              mountPath: /workspace
+            - name: src
+              mountPath: /src
       containers:
         - name: pytest
           image: vllm/vllm-openai:latest
           imagePullPolicy: IfNotPresent
-          workingDir: /workspace/src/Tail-Aware-Scheduer/vllm
+          workingDir: /src/Tail-Aware-Scheduer/vllm
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
+            - name: SETUPTOOLS_SCM_PRETEND_VERSION
+              value: "0.1.dev0"
           command:
             - bash
             - -lc
             - |
               set -euxo pipefail
-              VLLM_USE_PRECOMPILED=1 pip install -e . --torch-backend=auto
-              pip install -r requirements/test/cuda.in
-              python -m pytest tests/v1/core/test_scheduler.py -k 'tail_aware' -v
+              curl -LsSf https://astral.sh/uv/install.sh | sh
+              export PATH="$HOME/.local/bin:$PATH"
+              VLLM_USE_PRECOMPILED=1 uv pip install --system -e .
+              uv pip install --system pytest tblib
+              python3 -m pytest tests/v1/core/test_scheduler.py \
+                -k 'tail_aware' -v -s \
+                2>&1 | tee /results/pytest-output.txt
           resources:
             requests:
               cpu: "4"
-              memory: 12Gi
-              ephemeral-storage: 10Gi
+              memory: 16Gi
+              nvidia.com/gpu: "1"
             limits:
               cpu: "4"
-              memory: 12Gi
-              ephemeral-storage: 20Gi
+              memory: 16Gi
+              nvidia.com/gpu: "1"
           volumeMounts:
-            - name: exp
-              mountPath: /workspace
+            - name: src
+              mountPath: /src
+            - name: results
+              mountPath: /results
       volumes:
-        - name: exp
+        - name: src
+          emptyDir: {}
+        - name: results
           persistentVolumeClaim:
             claimName: tail-aware-eos-pvc

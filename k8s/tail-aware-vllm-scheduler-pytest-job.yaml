@@ -21,15 +21,8 @@ spec:
             - -lc
             - |
               set -eux
-              REPO=/src/Tail-Aware-Scheduer
-              BRANCH=main
-              git clone --depth 1 -b "$BRANCH" \
-                https://github.com/labyrinth-ssr/Tail-Aware-Scheduer.git "$REPO"
-              NEED=$(git -C "$REPO" rev-parse HEAD:vllm)
               git clone --depth 1 --branch tail-aware-scheduler \
-                https://github.com/labyrinth-ssr/vllm.git "$REPO/vllm"
-              git -C "$REPO/vllm" fetch --depth 1 origin "$NEED"
-              git -C "$REPO/vllm" checkout "$NEED"
+                https://github.com/labyrinth-ssr/vllm.git /src/vllm
           resources:
             requests:
               cpu: "2"
@@ -44,7 +37,7 @@ spec:
         - name: pytest
           image: vllm/vllm-openai:latest
           imagePullPolicy: IfNotPresent
-          workingDir: /src/Tail-Aware-Scheduer/vllm
+          workingDir: /src/vllm
           env:
             - name: PYTHONUNBUFFERED
               value: "1"

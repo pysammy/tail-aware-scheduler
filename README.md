@@ -28,12 +28,14 @@ vllm -> https://github.com/labyrinth-ssr/vllm.git
 branch -> tail-aware-scheduler
 ```
 
-Current scheduler skeleton is env-gated and token-count-only:
+Current scheduler skeleton is env-gated and uses both token count and P(EOS):
 
 ```bash
 VLLM_TAIL_AWARE_SCHEDULING=1
 VLLM_TAIL_AWARE_SHORT_THRESHOLD=64
 VLLM_TAIL_AWARE_LONG_QUOTA=0.2
+VLLM_TAIL_AWARE_EOS_WINDOW=16
+VLLM_TAIL_AWARE_EOS_THRESH=0.05
 ```
 
 Default vLLM behavior is unchanged unless `VLLM_TAIL_AWARE_SCHEDULING=1` is set.
@@ -99,15 +101,52 @@ python3 experiments/eos_signal/analyze_eos_traces.py \
 
 Outputs include summary metrics, optional plots, and a CSV sweep table.
 
-## vLLM Integration Plan
+## vLLM Integration
 
-After the offline signal looks useful, keep the scheduler changes small:
+The scheduler changes live on the `tail-aware-scheduler` branch of our vLLM fork. Two phases have been implemented:
 
-- Add per-request queue state: `probation`, `confirmed_short`, `long`.
-- Track generated token count and recent `P(EOS)` in request metadata.
-- Replace the waiting/running selection policy with two queues plus `long_quota`.
-- Preserve existing continuous batching, KV cache handling, and model execution.
+### Phase 1: Token-Count Demotion
 
-Target file from the proposal: `vllm/v1/core/sched/scheduler.py`.
+Requests are demoted from probation (high-priority) to the long queue after generating `short_threshold` output tokens. The running list is reordered each step to approximate `long_quota`, interleaving long requests among short/probation ones.
 
-See `proposal/implementation_todo.md` for the current follow-up plan.
+Modified files:
+- `vllm/v1/core/sched/scheduler.py` — demotion logic, running-list reorder, long-set cleanup.
+
+### Phase 2: P(EOS)-Aware Demotion
+
+P(EOS) — the probability the model assigns to the EOS token — is extracted at each decode step as a complementary demotion signal. If `max(recent P(EOS))` within a sliding window exceeds `eos_thresh`, the request stays in the high-priority queue even if its token count exceeds `short_threshold`. This prevents premature demotion of requests that are close to finishing.
+
+The P(EOS) computation happens on the raw logits (before logits processors, temperature, top-k/top-p) to ensure the probability reflects the model's genuine belief.
+
+Modified files:
+- `vllm/v1/sample/metadata.py` — added `eos_token_ids` field to `SamplingMetadata`.
+- `vllm/v1/sample/sampler.py` — added `_compute_eos_probs()` using `gather + logsumexp`, called in `forward()` before logits processors.
+- `vllm/v1/outputs.py` — added `eos_probs` to `SamplerOutput` (GPU tensor) and `ModelRunnerOutput` (CPU list).
+- `vllm/v1/worker/gpu_input_batch.py` — builds the `eos_token_ids` tensor from `sampling_params._eos_token_id`, gated behind `VLLM_TAIL_AWARE_SCHEDULING`.
+- `vllm/v1/worker/gpu_model_runner.py` — propagates `eos_probs` through both sync and async (overlapped) GPU→CPU copy paths.
+- `vllm/v1/request.py` — added `recent_eos_probs: list[float]` to store per-step P(EOS) history.
+- `vllm/v1/core/sched/scheduler.py` — extracts P(EOS) in `update_from_output()`, checks the sliding window in `_maybe_demote_tail_aware_request()`.
+
+### Unit Tests
+
+Seven scheduler tests cover tail-aware behavior (`tests/v1/core/test_scheduler.py`):
+
+| Test | Description |
+|------|-------------|
+| `test_tail_aware_token_demotion_threshold` | Requests are demoted after exceeding `short_threshold` output tokens. |
+| `test_tail_aware_reorder_running_with_long_quota` | Running list is reordered to interleave long requests at `long_quota` ratio. |
+| `test_tail_aware_cleanup_on_free_blocks` | Long-set entry is removed when a request finishes. |
+| `test_tail_aware_eos_prevents_demotion` | High P(EOS) in the window prevents demotion despite exceeding token threshold. |
+| `test_tail_aware_eos_low_allows_demotion` | Low P(EOS) allows normal token-count demotion. |
+| `test_tail_aware_eos_window_sliding` | Only the most recent `eos_window` values are considered; old high values are ignored. |
+| `test_tail_aware_eos_prob_stored_on_request` | P(EOS) values are correctly stored on the request object. |
+
+Run tests on the Kubernetes cluster:
+
+```bash
+kubectl delete job tail-aware-vllm-scheduler-pytest -n ucsc-hsc --ignore-not-found
+kubectl apply -f k8s/tail-aware-vllm-scheduler-pytest-job.yaml
+kubectl logs -n ucsc-hsc -l job-name=tail-aware-vllm-scheduler-pytest -c pytest -f
+```
+
+See `proposal/implementation_todo.md` for the remaining follow-up plan.

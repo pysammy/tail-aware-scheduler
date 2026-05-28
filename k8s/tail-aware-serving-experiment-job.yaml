@@ -92,7 +92,7 @@ spec:
               VLLM_USE_PRECOMPILED=1 uv pip install --system -e '.[bench]'
 
               MODEL="${MODEL:-Qwen/Qwen2.5-7B-Instruct}"
-              OUT=/workspace/tail-aware-results/serving/qwen-mixed
+              OUT=/workspace/tail-aware-results/serving/qwen-mixed-bounded
               mkdir -p "$OUT"
               cp /inputs/serving_mixed.jsonl "$OUT/serving_mixed.jsonl"
 
@@ -101,6 +101,8 @@ spec:
                 tail_enabled="$2"
                 eos_thresh="$3"
                 quota="$4"
+                preemption="$5"
+                max_preempts="$6"
                 server_log="$OUT/${name}.server.log"
 
                 export VLLM_TAIL_AWARE_SCHEDULING="$tail_enabled"
@@ -108,6 +110,8 @@ spec:
                 export VLLM_TAIL_AWARE_LONG_QUOTA="$quota"
                 export VLLM_TAIL_AWARE_EOS_WINDOW=16
                 export VLLM_TAIL_AWARE_EOS_THRESH="$eos_thresh"
+                export VLLM_TAIL_AWARE_PREEMPTION="$preemption"
+                export VLLM_TAIL_AWARE_MAX_PREEMPTS_PER_REQ="$max_preempts"
                 unset VLLM_TAIL_AWARE_LOG_PATH
 
                 vllm serve "$MODEL" \
@@ -134,17 +138,17 @@ spec:
                   --result-dir "$OUT" \
                   --result-filename "${name}.json" \
                   --ready-check-timeout-sec 900 \
-                  --metadata case="$name" tail_aware="$tail_enabled" long_quota="$quota" eos_thresh="$eos_thresh"
+                  --metadata case="$name" tail_aware="$tail_enabled" long_quota="$quota" eos_thresh="$eos_thresh" preemption="$preemption" max_preempts_per_req="$max_preempts"
                 kill "$server_pid"
                 wait "$server_pid" || true
                 trap - EXIT
               }
 
-              run_case baseline 0 0.05 0.2
-              run_case token_count_only 1 1.0 0.2
-              run_case eos_aware 1 0.05 0.2
-              run_case quota_0_1 1 0.05 0.1
-              run_case quota_0_3 1 0.05 0.3
+              run_case baseline 0 0.05 0.2 0 1
+              run_case token_count_only_waiting 1 1.0 0.2 0 1
+              run_case eos_aware_waiting 1 0.05 0.2 0 1
+              run_case bounded_preemption 1 0.05 0.2 1 1
+              run_case bounded_preemption_quota_0_3 1 0.05 0.3 1 1
           resources:
             requests:
               cpu: "4"
